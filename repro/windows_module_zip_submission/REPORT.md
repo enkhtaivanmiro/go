@@ -406,6 +406,24 @@ All four test configurations successfully reproduced the vulnerability, proving 
     ```
 - **Divergence / Failure:** Yes.
 
+---
+
+#### D. Verification of Code Injection / File Collision (pgo-collision payload)
+
+To test whether the vulnerability allows silent remote code injection through source file collision (e.g. shipping both `p.go` and a malicious `p.go ` in the same archive), we ran the matrix with `payload: pgo-collision`.
+
+**Outcome:**
+For all `pgo-collision` runs on Windows, the `go mod download` command failed with exit code `1` and returned the following unzip error:
+```text
+unzip D:\a\_temp\...\v1.0.0.zip: open D:\a\_temp\...\p.go : The file exists.
+```
+This failure occurs because Go’s `zip.Unzip` extraction writes files with the `os.O_EXCL` flag (exclusive creation). When Windows filename normalization collapses the trailing-space filename (`p.go `) to `p.go`, `OpenFile` encounters the existing benign `p.go` that was extracted first, triggering a loud OS-level write collision error.
+
+While this prevents multiple files in the same zip from quietly overwriting each other, it confirms that:
+1. Normalization is active at the OS path level during zip extraction.
+2. Archives with single-file normalization overrides (like our `gomod-loud` payload containing only `go.mod ` without `go.mod`) extract cleanly and successfully hijack cache behavior.
+
+
 ## 2. Impact analysis
 
 ### 2.1 Vulnerability type
