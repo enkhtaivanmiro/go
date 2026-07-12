@@ -15,10 +15,20 @@ function Show-FileIfPresent {
     )
 
     Write-Host "=== $Label ==="
-    if (Test-Path -LiteralPath $Path) {
-        Get-Content -LiteralPath $Path
-    } else {
-        Write-Host "<absent>"
+    Write-Host "Path: <$Path>"
+
+    try {
+        $exists = Test-Path -LiteralPath $Path
+        Write-Host "Exists=$exists"
+
+        if ($exists) {
+            Get-Content -LiteralPath $Path -Raw
+        } else {
+            Write-Host "<absent>"
+        }
+    }
+    catch {
+        Write-Host $_
     }
 }
 
