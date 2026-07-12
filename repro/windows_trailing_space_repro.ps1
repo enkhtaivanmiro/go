@@ -3,7 +3,10 @@ param(
     [string]$Transport = "file",
 
     [ValidateSet("space", "dot-space")]
-    [string]$Variant = "space"
+    [string]$Variant = "space",
+
+    [ValidateSet("gomod-loud", "gomod-silent", "pgo-collision")]
+    [string]$Payload = "gomod-loud"
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,7 +68,7 @@ function Invoke-GoCommand {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$workRoot = Join-Path $env:RUNNER_TEMP ("go-windows-repro-" + $Transport + "-" + $Variant)
+$workRoot = Join-Path $env:RUNNER_TEMP ("go-windows-repro-" + $Transport + "-" + $Variant + "-" + $Payload)
 $proxyRoot = Join-Path $workRoot "proxy"
 $clientDir = Join-Path $workRoot "client"
 $modCache = Join-Path $workRoot "modcache"
@@ -124,7 +127,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "built go.exe failed to run" }
 
     Write-Host "=== build proxy contents ==="
-    & $goExe run .\repro\trailing_space_proxy_builder.go -root $proxyRoot -variant $Variant
+    & $goExe run .\repro\trailing_space_proxy_builder.go -root $proxyRoot -variant $Variant -payload $Payload
     if ($LASTEXITCODE -ne 0) { throw "trailing_space_proxy_builder.go failed with exit code $LASTEXITCODE" }
 
     $proxyURL = ""
@@ -152,7 +155,25 @@ try {
 module client.example
 
 go 1.21
+
+require example.com/p v1.0.0
 "@
+
+        if ($Payload -eq "pgo-collision") {
+            Set-Content -LiteralPath (Join-Path $clientDir "main.go") -Value @"
+package main
+
+import (
+	"fmt"
+	"example.com/p"
+)
+
+func main() {
+	fmt.Printf("Label=%s\n", p.Label())
+	fmt.Printf("X=%d\n", p.X)
+}
+"@
+        }
 
         $env:GOSUMDB = "off"
         $env:GOPROXY = $proxyURL
@@ -162,9 +183,12 @@ go 1.21
         Write-Host "GOPROXY=$env:GOPROXY"
         Write-Host "GOMODCACHE=$env:GOMODCACHE"
         Write-Host "VARIANT=$Variant"
+        Write-Host "PAYLOAD=$Payload"
 
         $downloadOutput = ""
         $listOutput = ""
+        $runOutput = ""
+        $runExit = 0
         Push-Location $clientDir
         try {
             Write-Host "=== go mod download ==="
@@ -178,6 +202,14 @@ go 1.21
             $listExit = $LASTEXITCODE
             Write-Host $listOutput
             Write-Host ("exit code: " + $listExit)
+
+            if ($Payload -eq "pgo-collision" -and $downloadExit -eq 0) {
+                Write-Host "=== go run main.go ==="
+                $runOutput = (& $goExe run main.go 2>&1 | Out-String)
+                $runExit = $LASTEXITCODE
+                Write-Host $runOutput
+                Write-Host ("exit code: " + $runExit)
+            }
         } finally {
             Pop-Location
         }
@@ -197,22 +229,32 @@ go 1.21
         Show-FileIfPresent -Label "extracted go.mod" -Path (Join-Path $dir "go.mod")
         Show-FileIfPresent -Label "extracted go.mod(space)" -Path (Join-Path $dir "go.mod ")
         Show-FileIfPresent -Label "extracted go.mod(dot-space)" -Path (Join-Path $dir "go.mod. ")
+        Show-FileIfPresent -Label "extracted p.go" -Path (Join-Path $dir "p.go")
+        Show-FileIfPresent -Label "extracted p.go(space)" -Path (Join-Path $dir "p.go ")
+        Show-FileIfPresent -Label "extracted p.go(dot-space)" -Path (Join-Path $dir "p.go. ")
 
         Write-Host "=== existence checks ==="
         Write-Host ("go.mod => " + (Test-Path -LiteralPath (Join-Path $dir "go.mod")))
         Write-Host ("go.mod(space) => " + (Test-Path -LiteralPath (Join-Path $dir "go.mod ")))
         Write-Host ("go.mod(dot-space) => " + (Test-Path -LiteralPath (Join-Path $dir "go.mod. ")))
+        Write-Host ("p.go => " + (Test-Path -LiteralPath (Join-Path $dir "p.go")))
+        Write-Host ("p.go(space) => " + (Test-Path -LiteralPath (Join-Path $dir "p.go ")))
+        Write-Host ("p.go(dot-space) => " + (Test-Path -LiteralPath (Join-Path $dir "p.go. ")))
         Write-Host ("download exit => " + $downloadExit)
         Write-Host ("list exit => " + $listExit)
 
         $goModPath = Join-Path $dir "go.mod"
         $goModSpacePath = Join-Path $dir "go.mod "
         $goModDotSpacePath = Join-Path $dir "go.mod. "
+        $pGoPath = Join-Path $dir "p.go"
+        $pGoSpacePath = Join-Path $dir "p.go "
+        $pGoDotSpacePath = Join-Path $dir "p.go. "
         $downloadModPath = Join-Path $downloadDir "v1.0.0.mod"
 
         $result = [ordered]@{
             transport = $Transport
             variant = $Variant
+            payload = $Payload
             goproxy = $proxyURL
             work_root = $workRoot
             module_dir = $dir
@@ -221,14 +263,22 @@ go 1.21
             extracted_go_mod_exists = (Test-Path -LiteralPath $goModPath)
             extracted_go_mod_space_exists = (Test-Path -LiteralPath $goModSpacePath)
             extracted_go_mod_dot_space_exists = (Test-Path -LiteralPath $goModDotSpacePath)
+            extracted_p_go_exists = (Test-Path -LiteralPath $pGoPath)
+            extracted_p_go_space_exists = (Test-Path -LiteralPath $pGoSpacePath)
+            extracted_p_go_dot_space_exists = (Test-Path -LiteralPath $pGoDotSpacePath)
             download_exit_code = $downloadExit
             list_exit_code = $listExit
             downloaded_mod_content = (Get-FileContentOrNull $downloadModPath)
             extracted_go_mod_content = (Get-FileContentOrNull $goModPath)
             extracted_go_mod_space_content = (Get-FileContentOrNull $goModSpacePath)
             extracted_go_mod_dot_space_content = (Get-FileContentOrNull $goModDotSpacePath)
+            extracted_p_go_content = (Get-FileContentOrNull $pGoPath)
+            extracted_p_go_space_content = (Get-FileContentOrNull $pGoSpacePath)
+            extracted_p_go_dot_space_content = (Get-FileContentOrNull $pGoDotSpacePath)
             download_output = $downloadOutput
             list_output = $listOutput
+            run_output = $runOutput
+            run_exit_code = $runExit
         }
 
         $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $resultJson
@@ -236,6 +286,7 @@ go 1.21
         @(
             "transport=$Transport"
             "variant=$Variant"
+            "payload=$Payload"
             "goproxy=$proxyURL"
             "download_exit_code=$downloadExit"
             "list_exit_code=$listExit"
@@ -243,6 +294,11 @@ go 1.21
             "extracted_go_mod_exists=$($result.extracted_go_mod_exists)"
             "extracted_go_mod_space_exists=$($result.extracted_go_mod_space_exists)"
             "extracted_go_mod_dot_space_exists=$($result.extracted_go_mod_dot_space_exists)"
+            "extracted_p_go_exists=$($result.extracted_p_go_exists)"
+            "extracted_p_go_space_exists=$($result.extracted_p_go_space_exists)"
+            "extracted_p_go_dot_space_exists=$($result.extracted_p_go_dot_space_exists)"
+            "run_exit_code=$runExit"
+            "run_output=$($runOutput.Trim())"
         ) | Set-Content -LiteralPath $resultTxt
     } finally {
         Stop-ProcessIfRunning $httpServer

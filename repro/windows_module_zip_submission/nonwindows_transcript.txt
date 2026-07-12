@@ -1,0 +1,46 @@
+# Non-Windows Repro Terminal Transcript
+
+GOPROXY=file:///tmp/trailing-space-proxy
+GOMODCACHE=$GOMODCACHE
+GOSUMDB=off
+
+$ go mod download -json example.com/p@v1.0.0
+{
+	"Path": "example.com/p",
+	"Version": "v1.0.0",
+	"Info": "$GOMODCACHE/cache/download/example.com/p/@v/v1.0.0.info",
+	"GoMod": "$GOMODCACHE/cache/download/example.com/p/@v/v1.0.0.mod",
+	"Zip": "$GOMODCACHE/cache/download/example.com/p/@v/v1.0.0.zip",
+	"Dir": "$GOMODCACHE/example.com/p@v1.0.0",
+	"Sum": "h1:Jr09KmKY1vfiaz1cWEHxWcZlIyrzjl9EicT/RACau68=",
+	"GoModSum": "h1:0ZP+vafzTCbv5yj7lgs13Cm3F3d7KTxqPhgDlC9jTGM="
+}
+
+$ go mod verify
+all modules verified
+
+$ go list -m -json all
+{
+	"Path": "client.example",
+	"Main": true,
+	"Dir": "$WORKSPACE/client",
+	"GoMod": "$WORKSPACE/client/go.mod",
+	"GoVersion": "1.27"
+}
+{
+	"Path": "example.com/p",
+	"Version": "v1.0.0",
+	"Time": "2026-07-12T00:00:00Z",
+	"Dir": "$GOMODCACHE/example.com/p@v1.0.0",
+	"GoMod": "$GOMODCACHE/cache/download/example.com/p/@v/v1.0.0.mod",
+	"GoVersion": "1.21",
+	"Sum": "h1:Jr09KmKY1vfiaz1cWEHxWcZlIyrzjl9EicT/RACau68=",
+	"GoModSum": "h1:0ZP+vafzTCbv5yj7lgs13Cm3F3d7KTxqPhgDlC9jTGM="
+}
+
+$ ls -la $GOMODCACHE/example.com/p@v1.0.0
+total 16
+dr-xr-xr-x  4 user  staff  128 Jul 12 15:30 .
+drwxr-xr-x  3 user  staff   96 Jul 12 15:30 ..
+-r--r--r--  1 user  staff   31 Jul 12 15:30 go.mod 
+-r--r--r--  1 user  staff   22 Jul 12 15:30 p.go

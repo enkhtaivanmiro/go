@@ -11,6 +11,7 @@ jobs:
       matrix:
         transport: [file, http]
         variant: [space, dot-space]
+        payload: [gomod-loud, pgo-collision]
 
     steps:
       - name: Check out repository
@@ -24,16 +25,16 @@ jobs:
       - name: Run Windows normalization repro
         shell: pwsh
         run: |
-          .\repro\windows_trailing_space_repro.ps1 -Transport '${{ matrix.transport }}' -Variant '${{ matrix.variant }}'
+          .\repro\windows_trailing_space_repro.ps1 -Transport '${{ matrix.transport }}' -Variant '${{ matrix.variant }}' -Payload '${{ matrix.payload }}'
 
       - name: Publish repro summary
         if: always()
         shell: pwsh
         run: |
-          $resultDir = Join-Path $env:RUNNER_TEMP 'go-windows-repro-${{ matrix.transport }}-${{ matrix.variant }}'
+          $resultDir = Join-Path $env:RUNNER_TEMP 'go-windows-repro-${{ matrix.transport }}-${{ matrix.variant }}-${{ matrix.payload }}'
           $resultTxt = Join-Path $resultDir 'result.txt'
           if (Test-Path -LiteralPath $resultTxt) {
-            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## ${{ matrix.transport }} / ${{ matrix.variant }}"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## ${{ matrix.transport }} / ${{ matrix.variant }} / ${{ matrix.payload }}"
             Get-Content -LiteralPath $resultTxt | ForEach-Object {
               Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- $_"
             }
@@ -43,6 +44,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-module-zip-normalization-${{ matrix.transport }}-${{ matrix.variant }}
-          path: ${{ runner.temp }}/go-windows-repro-${{ matrix.transport }}-${{ matrix.variant }}
+          name: windows-module-zip-normalization-${{ matrix.transport }}-${{ matrix.variant }}-${{ matrix.payload }}
+          path: ${{ runner.temp }}/go-windows-repro-${{ matrix.transport }}-${{ matrix.variant }}-${{ matrix.payload }}
           if-no-files-found: warn
