@@ -59,9 +59,9 @@ $workRoot = Join-Path $env:RUNNER_TEMP ("go-windows-repro-" + $Transport + "-" +
 $proxyRoot = Join-Path $workRoot "proxy"
 $clientDir = Join-Path $workRoot "client"
 $modCache = Join-Path $workRoot "modcache"
-$goExe = Join-Path $workRoot "go-local.exe"
 $serverExe = Join-Path $workRoot "static-proxy-server.exe"
-$serverLog = Join-Path $workRoot "http-server.log"
+$serverOutLog = Join-Path $workRoot "http-server-stdout.log"
+$serverErrLog = Join-Path $workRoot "http-server-stderr.log"
 $transcript = Join-Path $workRoot "session.log"
 $resultJson = Join-Path $workRoot "result.json"
 $resultTxt = Join-Path $workRoot "result.txt"
@@ -73,19 +73,49 @@ Start-Transcript -LiteralPath $transcript | Out-Null
 
 Push-Location $repoRoot
 try {
-    $env:GOTOOLCHAIN = "local"
-    $env:GOROOT = $repoRoot
+    # --- Capture the bootstrap toolchain's GOROOT BEFORE touching any env vars ---
+    # This must happen while the system `go` (installed by actions/setup-go) is
+    # still the one on PATH, with its own untouched GOROOT.
+    $bootstrapGoRoot = (& go env GOROOT).Trim()
+    Write-Host "=== bootstrap toolchain ==="
+    Write-Host "GOROOT_BOOTSTRAP=$bootstrapGoRoot"
+    & go version
 
-    Write-Host "=== build local cmd/go ==="
-    Push-Location (Join-Path $repoRoot "src/cmd")
+    # --- Build the checked-out tree's own toolchain via make.bat ---
+    # This is the officially supported way to compile Go from source with a
+    # different (older) bootstrap compiler. It does NOT go through the
+    # `go.mod` minimum-version gate that a plain `go build` would hit, and it
+    # does NOT require setting GOROOT to the source tree beforehand — make.bat
+    # handles that internally.
+    Write-Host "=== build local toolchain via make.bat ==="
+    $env:GOROOT_BOOTSTRAP = $bootstrapGoRoot
+    Push-Location (Join-Path $repoRoot "src")
     try {
-        go build -o $goExe cmd/go
+        cmd /c ".\make.bat" 2>&1 | ForEach-Object { Write-Host $_ }
+        if ($LASTEXITCODE -ne 0) {
+            throw "make.bat failed with exit code $LASTEXITCODE"
+        }
     } finally {
         Pop-Location
     }
 
+    $goExe = Join-Path $repoRoot "bin\go.exe"
+    if (-not (Test-Path -LiteralPath $goExe)) {
+        throw "expected built go.exe not found at $goExe"
+    }
+
+    # Now that the tree's own toolchain is actually built, it's safe to point
+    # GOROOT at the tree for all subsequent invocations of $goExe.
+    $env:GOROOT = $repoRoot
+    $env:GOTOOLCHAIN = "local"
+
+    Write-Host "=== built toolchain version ==="
+    & $goExe version
+    if ($LASTEXITCODE -ne 0) { throw "built go.exe failed to run" }
+
     Write-Host "=== build proxy contents ==="
-    go run .\repro\trailing_space_proxy_builder.go -root $proxyRoot -variant $Variant
+    & $goExe run .\repro\trailing_space_proxy_builder.go -root $proxyRoot -variant $Variant
+    if ($LASTEXITCODE -ne 0) { throw "trailing_space_proxy_builder.go failed with exit code $LASTEXITCODE" }
 
     $proxyURL = ""
     $httpServer = $null
@@ -94,8 +124,15 @@ try {
     } else {
         $port = 8123
         Write-Host "=== start local proxy server ==="
-        go build -o $serverExe .\repro\static_proxy_server.go
-        $httpServer = Start-Process -FilePath $serverExe -ArgumentList @("-addr", "127.0.0.1:$port", "-root", $proxyRoot) -WorkingDirectory $repoRoot -RedirectStandardOutput $serverLog -RedirectStandardError $serverLog -PassThru
+        & $goExe build -o $serverExe .\repro\static_proxy_server.go
+        if ($LASTEXITCODE -ne 0) { throw "static_proxy_server.go build failed with exit code $LASTEXITCODE" }
+
+        $httpServer = Start-Process -FilePath $serverExe `
+            -ArgumentList @("-addr", "127.0.0.1:$port", "-root", $proxyRoot) `
+            -WorkingDirectory $repoRoot `
+            -RedirectStandardOutput $serverOutLog `
+            -RedirectStandardError $serverErrLog `
+            -PassThru
         Start-Sleep -Seconds 2
         $proxyURL = "http://127.0.0.1:$port"
     }
@@ -104,10 +141,9 @@ try {
         Set-Content -LiteralPath (Join-Path $clientDir "go.mod") -Value @"
 module client.example
 
-go 1.27
+go 1.21
 "@
 
-        $env:GOTOOLCHAIN = "local"
         $env:GOSUMDB = "off"
         $env:GOPROXY = $proxyURL
         $env:GOMODCACHE = $modCache
@@ -200,9 +236,13 @@ go 1.27
         ) | Set-Content -LiteralPath $resultTxt
     } finally {
         Stop-ProcessIfRunning $httpServer
-        if (Test-Path -LiteralPath $serverLog) {
-            Write-Host "=== http server log ==="
-            Get-Content -LiteralPath $serverLog
+        if (Test-Path -LiteralPath $serverOutLog) {
+            Write-Host "=== http server stdout ==="
+            Get-Content -LiteralPath $serverOutLog
+        }
+        if (Test-Path -LiteralPath $serverErrLog) {
+            Write-Host "=== http server stderr ==="
+            Get-Content -LiteralPath $serverErrLog
         }
     }
 } finally {
