@@ -1,0 +1,48 @@
+name: Windows Module Zip Normalization Repro
+
+on:
+  workflow_dispatch:
+
+jobs:
+  repro:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [file, http]
+        variant: [space, dot-space]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/cmd/go.mod
+
+      - name: Run Windows normalization repro
+        shell: pwsh
+        run: |
+          .\repro\windows_trailing_space_repro.ps1 -Transport '${{ matrix.transport }}' -Variant '${{ matrix.variant }}'
+
+      - name: Publish repro summary
+        if: always()
+        shell: pwsh
+        run: |
+          $resultDir = Join-Path $env:RUNNER_TEMP 'go-windows-repro-${{ matrix.transport }}-${{ matrix.variant }}'
+          $resultTxt = Join-Path $resultDir 'result.txt'
+          if (Test-Path -LiteralPath $resultTxt) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## ${{ matrix.transport }} / ${{ matrix.variant }}"
+            Get-Content -LiteralPath $resultTxt | ForEach-Object {
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- $_"
+            }
+          }
+
+      - name: Upload repro artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-module-zip-normalization-${{ matrix.transport }}-${{ matrix.variant }}
+          path: ${{ runner.temp }}/go-windows-repro-${{ matrix.transport }}-${{ matrix.variant }}
+          if-no-files-found: warn
